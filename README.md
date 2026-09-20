@@ -176,11 +176,3 @@ Scan_Status SRAM_AliasScan_Param(uint32_t base, uint32_t step,
 
 ---
 
-## 来源与致谢
-
-本工程在原例程基础上重建，包含以下第三方内容，版权归各自所有者：
-
-- **STMicroelectronics** — STM32F4xx HAL Driver、CMSIS 设备支持文件
-- **正点原子（ALIENTEK）** — 探索者 F407 例程框架：`SYSTEM/`、`BSP/{LCD,KEY,LED}/`、`Middlewares/USMART/`
-
-`Drivers/BSP/SRAM/`、`User/main.c` 与 `Doc/` 下的内容为本项目的工作成果。
