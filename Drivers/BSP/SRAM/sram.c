@@ -232,10 +232,8 @@ Scan_Status SRAM_AliasScan_Param(uint32_t base, uint32_t step, uint32_t k_max,Sc
             tag = "@1M";                      /* exactly on a 1MB boundary */
         }
 
-        /* Cross-check: the ARITHMETIC prediction (does this offset land on a
-         * 1MB boundary?) against the HARDWARE verdict (is it really an alias?).
-         * These two come from completely independent code paths, so agreement
-         * on every point is strong evidence for the 1MB period.            */
+        
+		
         pred_alias = (off % SRAM_SIZE_BYTES == 0) ? 1U : 0U;
         real_alias = (res == ALIAS_YES) ? 1U : 0U;
         if (pred_alias == real_alias) {
@@ -288,4 +286,134 @@ Scan_Status SRAM_AliasScan_Param(uint32_t base, uint32_t step, uint32_t k_max,Sc
            (unsigned long)ghost, (unsigned long)pred_ok,
            (unsigned long)pred_bad);
 	return SCAN_OK;
+}
+
+
+
+uint32_t sram_walk1(uint32_t addr, BitStatus *out, uint16_t *raw)
+{
+    volatile uint16_t *p = (volatile uint16_t *)addr;	//起始地址
+    uint32_t pass = 0;
+    uint32_t i;
+
+    for (i = 0; i < 16; i++) {
+        uint16_t pat = (uint16_t)(1u << i);				//位移，依次写入0x0001 0x0002...
+		
+        uint16_t rd;
+
+        *p = pat;
+        __DSB();
+		
+		
+        rd = *p;
+//		注入测试，测试工具的正确性
+//		if(i==0){
+//			rd=(uint16_t)0x0000; //将D0改为0
+//		}
+//		if (i == 5) {
+//			rd |= (uint16_t)(1u << 2);  //将D5改为1
+//		}
+        if (raw != 0) {
+            raw[i] = rd;
+        }
+
+        if (rd == pat) {
+            out[i] = BIT_OK;
+            pass++;
+        } else if ((rd & pat) == 0u) {
+            out[i] = BIT_STUCK0;    
+        } else {
+            out[i] = BIT_STUCK1;   
+        }
+    }
+
+    return pass;									//返回成功的个数
+}
+
+
+//状态字节返回器，根据BitStatus枚举返回
+static const char *bit_status_str(BitStatus s)
+{
+    switch (s) {
+    case BIT_OK:     return "OK";
+    case BIT_STUCK0: return "S0";
+    case BIT_STUCK1: return "S1?";
+    case BIT_BRIDGE: return "BR";
+    default:         return "??";
+    }
+}
+
+
+static void print_bit_list(uint16_t mask)
+{
+    uint32_t i;
+    uint32_t shown = 0;
+
+    for (i = 0; i < 16; i++) {
+        if (mask & (uint16_t)(1u << i)) {
+            printf("%sD%lu", (shown == 0u) ? "" : " ", (unsigned long)i);
+            shown++;
+        }
+    }
+    if (shown == 0u) {
+        printf("(none)");
+    }
+}
+
+//启动器，会运行sram_walk1()
+uint32_t sram_run_walk1(uint32_t addr)
+{
+    BitStatus st[16];
+    uint16_t  raw[16];
+    uint32_t  pass;
+    uint32_t  i;
+
+   
+    if (((addr & 1u) != 0u) ||
+        (addr < SRAM_BASE_ADDR) ||
+        ((addr + 2u) > (SRAM_BASE_ADDR + SRAM_WINDOW_SIZE))) {
+        printf("[WALK1] REJECT: addr=0x%08lX is not a halfword-aligned address "
+               "inside 0x%08lX~0x%08lX\r\n",
+               (unsigned long)addr,
+               (unsigned long)SRAM_BASE_ADDR,
+               (unsigned long)(SRAM_BASE_ADDR + SRAM_WINDOW_SIZE - 1u));
+        return 0;
+    }
+
+    pass = sram_walk1(addr, st, raw);
+
+    printf("\r\n==== Stage 2.1: Walking-1 data bus check ====\r\n");
+    printf("addr  : 0x%08lX\r\n\r\n", (unsigned long)addr);
+    printf("bit  pattern   write   read    verdict\r\n");
+    printf("---  --------  ------  ------  -------------------------\r\n");
+
+    for (i = 0; i < 16; i++) {
+        uint16_t pat   = (uint16_t)(1u << i);
+        uint16_t extra = (uint16_t)(raw[i] & (uint16_t)(~pat));
+
+        printf("D%-3lu 0x%04X    0x%04X  0x%04X  %-5s",
+               (unsigned long)i, pat, pat, raw[i], bit_status_str(st[i]));
+
+        if (extra != 0u) {
+            printf("  unexpected 1s: ");
+            print_bit_list(extra);
+        }
+        printf("\r\n");
+    }
+
+    printf("\r\nresult: %lu/16 passed", (unsigned long)pass);
+
+    if (pass == 16u) {
+        printf("  -> D0~D15 all normal\r\n");
+    } else {
+        printf("\r\nbad bits: ");
+        for (i = 0; i < 16; i++) {
+            if (st[i] != BIT_OK) {
+                printf("D%lu(%s) ", (unsigned long)i, bit_status_str(st[i]));
+            }
+        }
+        printf("\r\n");
+    }
+
+    return pass;
 }

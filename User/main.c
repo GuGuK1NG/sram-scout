@@ -104,12 +104,13 @@ int main(void)
                     "Hyp.CAPAC.: 1MB", BLACK);
     draw_rule(ROW_SEP2);
     lcd_show_string(COL_X, ROW_HINT, 200, LINE_H, 16,
-                    "KEY0: re-scan", BLACK);
-	
+                    "KEY0:alias KEY1:bus", BLACK);
+
     while (1)
     {
         key = key_scan(0);
 		if(key==KEY0_PRES){
+			//KEY0对应阶段1测试
 			ScanStats st1,st2;
 			Scan_Status s1,s2;
 			
@@ -133,12 +134,7 @@ int main(void)
                     (unsigned long)(st2.pred_ok + st2.pred_bad));
             lcd_show_string(COL_X, ROW_SCAN2, 200, LINE_H, 16, buf, BLACK);
 
-            /* The verdict rests on the STRONGEST evidence available, not merely
-             * on "the two runs agreed". A partly-dead write channel would make
-             * both runs report 62 aliases and still agree. What actually
-             * validates the 1MB period is that the ARITHMETIC prediction
-             * (offset on a 1MB boundary) matches the HARDWARE measurement
-             * (really an alias?) on EVERY point, in both scans.            */
+            
             const char *verdict;
             uint16_t vcolor;
             if (s1 != SCAN_OK || s2 != SCAN_OK) {
@@ -156,6 +152,15 @@ int main(void)
             lcd_show_string(COL_X, ROW_VERDICT, POS_W, LINE_H, 16,
                             (char *)verdict, vcolor);
 		}
+		else if (key == KEY1_PRES) {
+            //KEY1对应阶段1测试
+            char buf[24];
+            uint32_t pass = sram_run_walk1(0x68000000);
+
+            sprintf(buf, "Bus   : %lu/16 OK", (unsigned long)pass);
+            lcd_show_string(COL_X, ROW_SCAN1, 200, LINE_H, 16, buf,
+                            (pass == 16u) ? GREEN : RED);
+        }
 		LED0_TOGGLE();
 		delay_ms(200);
     }

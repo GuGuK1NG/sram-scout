@@ -41,6 +41,13 @@ typedef struct {
       uint32_t k_max;
   } ScanStats;
 
+typedef enum{
+	BIT_OK     = 0,
+    BIT_STUCK0 = 1,   /* 该位恒 0 */
+    BIT_STUCK1 = 2,   /* 该位恒 1 */
+    BIT_BRIDGE = 3,   /* 疑似与其它位短路 */
+}BitStatus;
+
 typedef enum {
     SCAN_OK        = 0,
     SCAN_ERR_RANGE = -1,
@@ -53,8 +60,13 @@ void sram_write(uint8_t *pbuf,uint32_t addr,uint32_t datalen);
 void sram_read(uint8_t *pbuf,uint32_t addr,uint32_t datalen);
 uint8_t sram_test_read(uint32_t addr);
 void sram_test_write(uint32_t addr, uint8_t data);
-
+//**阶段1测试代码**//
 Gate_Status  SRAM_WriteChannel_SelfTest(void);
 Scan_Status  SRAM_AliasScan_Param(uint32_t base, uint32_t step,
                                   uint32_t k_max, ScanStats *out);
+
+
+//**阶段2测试代码**//
+uint32_t sram_walk1(uint32_t addr, BitStatus *out, uint16_t *raw);
+uint32_t sram_run_walk1(uint32_t addr);
 #endif
