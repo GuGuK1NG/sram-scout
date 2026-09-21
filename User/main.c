@@ -40,10 +40,13 @@
 #define ROW_ALIAS   (ROW_WINDOW  + LINE_H)
 #define ROW_CAP     (ROW_ALIAS   + LINE_H)
 #define ROW_SEP2    (ROW_CAP     + LINE_H + 4)   /* rule */
+/* KEY0: 阶段1 别名扫描 —— 占 3 行 */
 #define ROW_SCAN1   (ROW_SEP2    + 4)
 #define ROW_SCAN2   (ROW_SCAN1   + LINE_H)
 #define ROW_VERDICT (ROW_SCAN2   + LINE_H)
-#define ROW_SEP3    (ROW_VERDICT + LINE_H + 4)   /* rule */
+/* KEY1: 阶段2 数据总线矩阵 —— 占 1 行 */
+#define ROW_MATRIX  (ROW_VERDICT + LINE_H)
+#define ROW_SEP3    (ROW_MATRIX  + LINE_H + 4)   /* rule */
 #define ROW_HINT    (ROW_SEP3    + 4)
 
 #define POS_X       10
@@ -103,8 +106,11 @@ int main(void)
     lcd_show_string(COL_X, ROW_CAP, 200, LINE_H, 16,
                     "Hyp.CAPAC.: 1MB", BLACK);
     draw_rule(ROW_SEP2);
+    /* 结果区（阶段1 三行 + 阶段2 一行）现在还是空的，等按键填入。
+     * SEP3 先画好，把结果区和下面的按键提示分开。 */
+    draw_rule(ROW_SEP3);
     lcd_show_string(COL_X, ROW_HINT, 200, LINE_H, 16,
-                    "KEY0:alias KEY1:bus", BLACK);
+                    "KEY0:alias  KEY1:matrix", BLACK);
 
     while (1)
     {
@@ -153,13 +159,14 @@ int main(void)
                             (char *)verdict, vcolor);
 		}
 		else if (key == KEY1_PRES) {
-            //KEY1对应阶段1测试
-            char buf[24];
-            uint32_t pass = sram_run_walk1(0x68000000);
+            //KEY1 对应阶段2.2：六地址数据总线矩阵扫描。
+            //完整 16x6 表格在串口上；LCD 放不下，只显示汇总。
+            Scan_Status bus_st = sram_run_bus_matrix();
 
-            sprintf(buf, "Bus   : %lu/16 OK", (unsigned long)pass);
-            lcd_show_string(COL_X, ROW_SCAN1, 200, LINE_H, 16, buf,
-                            (pass == 16u) ? GREEN : RED);
+            lcd_show_string(COL_X, ROW_MATRIX, 200, LINE_H, 16,
+                            (bus_st == SCAN_OK) ? "Matrix: 6 addr OK"
+                                                : "Matrix: FAILED",
+                            (bus_st == SCAN_OK) ? GREEN : RED);
         }
 		LED0_TOGGLE();
 		delay_ms(200);

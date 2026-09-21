@@ -1,7 +1,14 @@
 #include "./BSP/SRAM/sram.h"
 #include "./SYSTEM/usart/usart.h"
 
-
+static const uint32_t g_bus_addrs[BUS_ADDR_CNT] = {
+    0x68000000,   /* A0 基准 */
+    0x68000002,   /* A1 +2 */
+    0x68000100,   /* A2 +256 */
+    0x68080000,   /* A3 +512KB  不同物理单元 */
+    0x680C0000,   /* A4 +768KB  不同物理单元 */
+    0x68100000,   /* A5 +1MB    预测与 A0 逐位相同 */
+};
 
 SRAM_HandleTypeDef g_sram_handler;
 
@@ -307,12 +314,12 @@ uint32_t sram_walk1(uint32_t addr, BitStatus *out, uint16_t *raw)
 		
         rd = *p;
 //		注入测试，测试工具的正确性
-//		if(i==0){
-//			rd=(uint16_t)0x0000; //将D0改为0
-//		}
-//		if (i == 5) {
-//			rd |= (uint16_t)(1u << 2);  //将D5改为1
-//		}
+		if(i == 0){
+			rd=(uint16_t)0x0000; //将D0改为0
+		}
+		if (i == 5) {
+			rd |= (uint16_t)(1u << 2);  //将D5改为1
+		}
         if (raw != 0) {
             raw[i] = rd;
         }
@@ -344,76 +351,110 @@ static const char *bit_status_str(BitStatus s)
 }
 
 
-static void print_bit_list(uint16_t mask)
-{
-    uint32_t i;
-    uint32_t shown = 0;
+/* 阶段 2.1 的单地址详细报告已移除。
+ * 现在只保留 sram_walk1()（纯测量原语，被矩阵扫描调用）和矩阵报告。
+ * 需要单地址详情时，从 git 历史里取回 sram_run_walk1() 即可。 */
 
-    for (i = 0; i < 16; i++) {
-        if (mask & (uint16_t)(1u << i)) {
-            printf("%sD%lu", (shown == 0u) ? "" : " ", (unsigned long)i);
-            shown++;
+
+Scan_Status sram_run_bus_matrix(void){
+    BusReport rep={0};
+    uint32_t i, j;
+
+
+    /* ---- 门控自检 ---- */
+    if(SRAM_WriteChannel_SelfTest()!=GATE_OK){
+        printf("[BUS] abort: gate failed\r\n");
+        return SCAN_ERR_RANGE;
+    }
+
+    /* ---- 采集 ---- */
+    for(i=0;i<BUS_ADDR_CNT;++i){
+        uint32_t addr = g_bus_addrs[i];
+        BusAddrResult *r;
+
+        /* 地址范围检查：绝不能越过 NE4 窗口（那里是 LCD）。 */
+        if(((addr & 1u) != 0u) ||
+           (addr < SRAM_BASE_ADDR) ||
+           ((addr + 2u) > (SRAM_BASE_ADDR + SRAM_WINDOW_SIZE))){
+            printf("[BUS] skip A%lu = 0x%08lX: out of range\r\n",
+                   (unsigned long)i, (unsigned long)addr);
+            continue;
         }
-    }
-    if (shown == 0u) {
-        printf("(none)");
-    }
-}
 
-//启动器，会运行sram_walk1()
-uint32_t sram_run_walk1(uint32_t addr)
-{
-    BitStatus st[16];
-    uint16_t  raw[16];
-    uint32_t  pass;
-    uint32_t  i;
-
-   
-    if (((addr & 1u) != 0u) ||
-        (addr < SRAM_BASE_ADDR) ||
-        ((addr + 2u) > (SRAM_BASE_ADDR + SRAM_WINDOW_SIZE))) {
-        printf("[WALK1] REJECT: addr=0x%08lX is not a halfword-aligned address "
-               "inside 0x%08lX~0x%08lX\r\n",
-               (unsigned long)addr,
-               (unsigned long)SRAM_BASE_ADDR,
-               (unsigned long)(SRAM_BASE_ADDR + SRAM_WINDOW_SIZE - 1u));
-        return 0;
+        r = &rep.a[rep.cnt];            /* 注意：用 cnt 而不是 i，
+                                         *   因为跳过的地址不占槽位 */
+        r->addr = addr;
+        r->pass = sram_walk1(addr, r->st, r->raw);
+        rep.cnt++;
     }
 
-    pass = sram_walk1(addr, st, raw);
+    if(rep.cnt == 0u){
+        printf("[BUS] no valid address\r\n");
+        return SCAN_ERR_RANGE;
+    }
 
-    printf("\r\n==== Stage 2.1: Walking-1 data bus check ====\r\n");
-    printf("addr  : 0x%08lX\r\n\r\n", (unsigned long)addr);
-    printf("bit  pattern   write   read    verdict\r\n");
-    printf("---  --------  ------  ------  -------------------------\r\n");
+    /* ---- 第 3 段：打印矩阵 ----
+     * 行 = 位（D0~D15），列 = 地址（A0~A5）。
+     * 列宽统一：第 1 列 5 字符，第 2 列 10 字符，之后每列 6 字符。
+     * 表头一律用 ASCII —— 中文字符在终端占 2 列宽，但 printf 按
+     * 字符数计算宽度，混进去会让整个表错位。中文说明放到表下的图例里。 */
+    printf("\r\n==== Stage 2.2: data bus matrix scan ====\r\n\r\n");
 
-    for (i = 0; i < 16; i++) {
-        uint16_t pat   = (uint16_t)(1u << i);
-        uint16_t extra = (uint16_t)(raw[i] & (uint16_t)(~pat));
+    printf("%-5s%-10s", "bit", "pattern");
+    for(j=0;j<rep.cnt;++j){
+        char cell[8];
+        sprintf(cell, "A%lu", (unsigned long)j);
+        printf("%-6s", cell);
+    }
+    printf("\r\n");
 
-        printf("D%-3lu 0x%04X    0x%04X  0x%04X  %-5s",
-               (unsigned long)i, pat, pat, raw[i], bit_status_str(st[i]));
+    printf("%-5s%-10s", "---", "--------");
+    for(j=0;j<rep.cnt;++j){
+        printf("------");
+    }
+    printf("\r\n");
 
-        if (extra != 0u) {
-            printf("  unexpected 1s: ");
-            print_bit_list(extra);
+    for(i=0;i<16;++i){
+        char lbl[8], pat[12];
+
+        sprintf(lbl, "D%lu", (unsigned long)i);
+        sprintf(pat, "0x%04X", (unsigned)(1u << i));
+        printf("%-5s%-10s", lbl, pat);
+
+        for(j=0;j<rep.cnt;++j){
+            printf("%-6s", bit_status_str(rep.a[j].st[i]));   /* [地址j][位i] */
         }
         printf("\r\n");
     }
 
-    printf("\r\nresult: %lu/16 passed", (unsigned long)pass);
+    printf("%-5s%-10s", "---", "--------");
+    for(j=0;j<rep.cnt;++j){
+        printf("------");
+    }
+    printf("\r\n");
 
-    if (pass == 16u) {
-        printf("  -> D0~D15 all normal\r\n");
-    } else {
-        printf("\r\nbad bits: ");
-        for (i = 0; i < 16; i++) {
-            if (st[i] != BIT_OK) {
-                printf("D%lu(%s) ", (unsigned long)i, bit_status_str(st[i]));
-            }
+    printf("%-5s%-10s", "pass", "");
+    for(j=0;j<rep.cnt;++j){
+        char cell[10];
+        sprintf(cell, "%lu/16", (unsigned long)rep.a[j].pass);
+        printf("%-6s", cell);
+    }
+    printf("\r\n");
+
+    /* ---- 地址图例：3 个一行，不参与上面的表格对齐 ---- */
+    printf("\r\naddress legend:\r\n");
+    for(j=0;j<rep.cnt;++j){
+        printf("  A%-2lu = 0x%08lX", (unsigned long)j, (unsigned long)rep.a[j].addr);
+        if(((j+1u) % 3u) == 0u){
+            printf("\r\n");
         }
+        else{
+            printf("   ");
+        }
+    }
+    if((rep.cnt % 3u) != 0u){
         printf("\r\n");
     }
 
-    return pass;
+    return SCAN_OK;
 }

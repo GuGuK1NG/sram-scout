@@ -15,6 +15,8 @@
 #define SIG_GATE   ((uint16_t)0x1234U)   
 #define SIG1       ((uint16_t)0xA5A5U)   
 #define SIG2       ((uint16_t)0x5A5AU)   
+#define BUS_ADDR_CNT 6
+
 
 
 typedef enum {
@@ -52,6 +54,21 @@ typedef enum {
     SCAN_OK        = 0,
     SCAN_ERR_RANGE = -1,
 } Scan_Status;
+
+typedef struct {
+	uint32_t addr; //地址
+	uint32_t pass;	//通过个数
+	BitStatus st[16];	//st[0]=D0
+	uint16_t raw[16];	//原始数据，方便交叉对比
+}BusAddrResult;
+
+typedef struct{
+	BusAddrResult a[BUS_ADDR_CNT];
+	uint32_t cnt;
+}BusReport;
+
+
+
 #define SRAM_BASE_ADDR         (0X60000000 + (0X4000000 * (SRAM_FSMC_NEX - 1)))
 extern SRAM_HandleTypeDef g_sram_handler;    /* SRAM��� */
 
@@ -60,6 +77,7 @@ void sram_write(uint8_t *pbuf,uint32_t addr,uint32_t datalen);
 void sram_read(uint8_t *pbuf,uint32_t addr,uint32_t datalen);
 uint8_t sram_test_read(uint32_t addr);
 void sram_test_write(uint32_t addr, uint8_t data);
+
 //**阶段1测试代码**//
 Gate_Status  SRAM_WriteChannel_SelfTest(void);
 Scan_Status  SRAM_AliasScan_Param(uint32_t base, uint32_t step,
@@ -68,5 +86,6 @@ Scan_Status  SRAM_AliasScan_Param(uint32_t base, uint32_t step,
 
 //**阶段2测试代码**//
 uint32_t sram_walk1(uint32_t addr, BitStatus *out, uint16_t *raw);
-uint32_t sram_run_walk1(uint32_t addr);
+Scan_Status sram_run_bus_matrix(void);   /* 阶段2.2: 六地址矩阵扫描 */
+
 #endif
