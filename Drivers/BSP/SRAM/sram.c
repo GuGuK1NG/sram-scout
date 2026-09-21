@@ -297,15 +297,16 @@ Scan_Status SRAM_AliasScan_Param(uint32_t base, uint32_t step, uint32_t k_max,Sc
 
 
 
-uint32_t sram_walk1(uint32_t addr, BitStatus *out, uint16_t *raw)
+uint32_t sram_walk(uint32_t addr, BitStatus *out, uint16_t *raw, uint8_t mode)
 {
     volatile uint16_t *p = (volatile uint16_t *)addr;	//起始地址
     uint32_t pass = 0;
     uint32_t i;
-
+	
     for (i = 0; i < 16; i++) {
-        uint16_t pat = (uint16_t)(1u << i);				//位移，依次写入0x0001 0x0002...
-		
+		uint16_t bit=(uint16_t)(1u<<i);
+        uint16_t pat = mode?(uint16_t)(0xFFFFU ^ bit):bit;				//位移，模式0时依次写入0x0001 0x0002...
+																		//模式1时，依次写入0xFFFF 0xFFFE...
         uint16_t rd;
 
         *p = pat;
@@ -313,28 +314,55 @@ uint32_t sram_walk1(uint32_t addr, BitStatus *out, uint16_t *raw)
 		
 		
         rd = *p;
-//		注入测试，测试工具的正确性
+		//注入测试1，测试工具的正确性
 		if(i == 0){
 			rd=(uint16_t)0x0000; //将D0改为0
 		}
 		if (i == 5) {
-			rd |= (uint16_t)(1u << 2);  //将D5改为1
+			rd |= (uint16_t)(1u << 5);  //将D5改为1
 		}
         if (raw != 0) {
             raw[i] = rd;
         }
+		//注入测试2
+//		if (addr == 0x68000100 && i == 5) {
+//			rd &= (uint16_t)(1u << 2);
+//		}
+		
+		if (mode == 1) {
+			/* Walking-0：第 i 位期望 0 */
+			if (rd == pat) {
+				out[i] = BIT_OK;
+				pass++;
+			}
+			else if ((rd & bit) == 0u) {
+				/* 第 i 位确实是 0 —— 本位正常，异常在别处 */
+				out[i] = BIT_BRIDGE;
+			}
+			else {
+				/* 第 i 位是 1 —— 降不下来 */
+				out[i] = BIT_STUCK1;
+			}
+			}
+			else {
+			/* Walking-1：第 i 位期望 1 */
+			if (rd == pat) {
+				out[i] = BIT_OK;
+				pass++;
+			}
+			else if ((rd & bit) == 0u) {
+				/* 第 i 位是 0 —— 升不上去 */
+				out[i] = BIT_STUCK0;
+			}
+			else {
+				/* 第 i 位是 1 —— 本位正常，异常在别处 */
+				out[i] = BIT_BRIDGE;
+			}
+			}
 
-        if (rd == pat) {
-            out[i] = BIT_OK;
-            pass++;
-        } else if ((rd & pat) == 0u) {
-            out[i] = BIT_STUCK0;    
-        } else {
-            out[i] = BIT_STUCK1;   
-        }
-    }
-
-    return pass;									//返回成功的个数
+											
+		}
+	return pass;				//返回成功的个数
 }
 
 
@@ -344,7 +372,7 @@ static const char *bit_status_str(BitStatus s)
     switch (s) {
     case BIT_OK:     return "OK";
     case BIT_STUCK0: return "S0";
-    case BIT_STUCK1: return "S1?";
+    case BIT_STUCK1: return "S1";
     case BIT_BRIDGE: return "BR";
     default:         return "??";
     }
@@ -358,6 +386,7 @@ static const char *bit_status_str(BitStatus s)
 
 Scan_Status sram_run_bus_matrix(void){
     BusReport rep={0};
+	BusReport rep0={0};
     uint32_t i, j;
 
 
@@ -368,6 +397,7 @@ Scan_Status sram_run_bus_matrix(void){
     }
 
     /* ---- 采集 ---- */
+	//模式1采集
     for(i=0;i<BUS_ADDR_CNT;++i){
         uint32_t addr = g_bus_addrs[i];
         BusAddrResult *r;
@@ -384,24 +414,55 @@ Scan_Status sram_run_bus_matrix(void){
         r = &rep.a[rep.cnt];            /* 注意：用 cnt 而不是 i，
                                          *   因为跳过的地址不占槽位 */
         r->addr = addr;
-        r->pass = sram_walk1(addr, r->st, r->raw);
+        r->pass = sram_walk(addr, r->st, r->raw,1);
         rep.cnt++;
     }
+	//模式0采集
+	for(i=0;i<BUS_ADDR_CNT;++i){
+        uint32_t addr = g_bus_addrs[i];
+        BusAddrResult *r;
 
-    if(rep.cnt == 0u){
+        /* 地址范围检查：绝不能越过 NE4 窗口（那里是 LCD）。 */
+        if(((addr & 1u) != 0u) ||
+           (addr < SRAM_BASE_ADDR) ||
+           ((addr + 2u) > (SRAM_BASE_ADDR + SRAM_WINDOW_SIZE))){
+            printf("[BUS] skip A%lu = 0x%08lX: out of range\r\n",
+                   (unsigned long)i, (unsigned long)addr);
+            continue;
+        }
+
+        r = &rep0.a[rep0.cnt];            /* 注意：用 cnt 而不是 i，
+                                         *   因为跳过的地址不占槽位 */
+        r->addr = addr;
+        r->pass = sram_walk(addr, r->st, r->raw,0);
+        rep0.cnt++;
+    }
+	if(rep.cnt == 0u){
         printf("[BUS] no valid address\r\n");
         return SCAN_ERR_RANGE;
     }
+	if(rep0.cnt == 0u){
+        printf("[BUS] no valid address\r\n");
+        return SCAN_ERR_RANGE;
+    }
+	sram_run_bus_matrix_print(&rep,  1);
+    sram_run_bus_matrix_print(&rep0, 0);
+    return SCAN_OK;
+}
+void sram_run_bus_matrix_print(const BusReport *rep, uint8_t mode)
+{
 
-    /* ---- 第 3 段：打印矩阵 ----
+	/* ---- 第 3 段：打印矩阵 ----
      * 行 = 位（D0~D15），列 = 地址（A0~A5）。
      * 列宽统一：第 1 列 5 字符，第 2 列 10 字符，之后每列 6 字符。
      * 表头一律用 ASCII —— 中文字符在终端占 2 列宽，但 printf 按
      * 字符数计算宽度，混进去会让整个表错位。中文说明放到表下的图例里。 */
-    printf("\r\n==== Stage 2.2: data bus matrix scan ====\r\n\r\n");
+	uint32_t i, j;
+    printf("\r\n==== Stage 2.2: Walking-%s matrix ====\r\n\r\n",
+           (mode == 1) ? "0" : "1");
 
     printf("%-5s%-10s", "bit", "pattern");
-    for(j=0;j<rep.cnt;++j){
+    for(j=0;j<rep->cnt;++j){
         char cell[8];
         sprintf(cell, "A%lu", (unsigned long)j);
         printf("%-6s", cell);
@@ -409,7 +470,7 @@ Scan_Status sram_run_bus_matrix(void){
     printf("\r\n");
 
     printf("%-5s%-10s", "---", "--------");
-    for(j=0;j<rep.cnt;++j){
+    for(j=0;j<rep->cnt;++j){
         printf("------");
     }
     printf("\r\n");
@@ -420,31 +481,31 @@ Scan_Status sram_run_bus_matrix(void){
         sprintf(lbl, "D%lu", (unsigned long)i);
         sprintf(pat, "0x%04X", (unsigned)(1u << i));
         printf("%-5s%-10s", lbl, pat);
-
-        for(j=0;j<rep.cnt;++j){
-            printf("%-6s", bit_status_str(rep.a[j].st[i]));   /* [地址j][位i] */
+		
+        for(j=0;j<rep->cnt;++j){
+            printf("%-6s", bit_status_str(rep->a[j].st[i]));   /* [地址j][位i] */
         }
         printf("\r\n");
     }
 
     printf("%-5s%-10s", "---", "--------");
-    for(j=0;j<rep.cnt;++j){
+    for(j=0;j<rep->cnt;++j){
         printf("------");
     }
     printf("\r\n");
 
     printf("%-5s%-10s", "pass", "");
-    for(j=0;j<rep.cnt;++j){
+    for(j=0;j<rep->cnt;++j){
         char cell[10];
-        sprintf(cell, "%lu/16", (unsigned long)rep.a[j].pass);
+        sprintf(cell, "%lu/16", (unsigned long)rep->a[j].pass);
         printf("%-6s", cell);
     }
     printf("\r\n");
 
     /* ---- 地址图例：3 个一行，不参与上面的表格对齐 ---- */
     printf("\r\naddress legend:\r\n");
-    for(j=0;j<rep.cnt;++j){
-        printf("  A%-2lu = 0x%08lX", (unsigned long)j, (unsigned long)rep.a[j].addr);
+    for(j=0;j<rep->cnt;++j){
+        printf("  A%-2lu = 0x%08lX", (unsigned long)j, (unsigned long)rep->a[j].addr);
         if(((j+1u) % 3u) == 0u){
             printf("\r\n");
         }
@@ -452,9 +513,75 @@ Scan_Status sram_run_bus_matrix(void){
             printf("   ");
         }
     }
-    if((rep.cnt % 3u) != 0u){
+    if((rep->cnt % 3u) != 0u){
         printf("\r\n");
     }
+	//交叉验证代码
+	uint32_t same=0;
+	uint32_t b;
+	uint32_t base=0;
+	uint32_t peer=rep->cnt-1;
+		
+	uint32_t diff = (rep->a[peer].addr>rep->a[base].addr)
+						?(rep->a[peer].addr-rep->a[base].addr)
+						:(rep->a[base].addr-rep->a[peer].addr);
+	if(diff % SRAM_SIZE_BYTES==0u){
+	for(b=0;b<16;++b)
+	if(rep->a[base].st[b]==rep->a[peer].st[b]){
+					same++;
+		}
+	
+		
+	
+	printf("--- alias cross-check---\r\n");
+	printf("A%lu(0x%08lX) vs A%lu(0x%08lX): %lu/16 bit identical\r\n",(unsigned long)base,
+			(unsigned long)rep->a[base].addr,(unsigned long)peer,
+			(unsigned long)rep->a[peer].addr,(unsigned long)same);
+	}
+	else{
+		
+		printf("A%lu vs A%lu differ by 0x%08lX, not a multiple of 1MB - skipped\r\n",
+           (unsigned long)base, (unsigned long)peer, (unsigned long)diff);
 
-    return SCAN_OK;
+	}
+	uint32_t faults=0;
+	uint32_t line_fault=0;
+	uint32_t cell_fault=0;
+	for(b=0;b<16;++b){
+		uint32_t bad=0;
+		for(j=0;j<rep->cnt;++j){
+			if(rep->a[j].st[b]!=BIT_OK){
+				bad++;
+			}
+		}
+		if(bad==0U){
+			continue;
+		}
+		faults++;
+		if(bad == rep->cnt){
+                line_fault = 1;
+                printf("D%-3lu: DATA LINE FAULT\r\n", (unsigned long)b);
+                printf("       abnormal in all %lu addresses\r\n",
+                       (unsigned long)rep->cnt);
+                printf("       -> check the D%lu trace / solder joint\r\n",
+                       (unsigned long)b);
+            }
+            else{
+                cell_fault = 1;
+                printf("D%-3lu: STORAGE CELL FAULT\r\n", (unsigned long)b);
+                printf("       abnormal in:");
+                for(j=0;j<rep->cnt;++j){
+                    if(rep->a[j].st[b] != BIT_OK){
+                        printf(" A%lu(0x%08lX)", (unsigned long)j,
+                               (unsigned long)rep->a[j].addr);
+                    }
+                }
+                printf("\r\n       other %lu addresses normal\r\n",
+                       (unsigned long)(rep->cnt - bad));
+                printf("       -> that memory cell is damaged, not a data line\r\n");
+          }
+	}
+	if(faults == 0U){
+		printf("D0 ~ D15 : all normal\r\n");
+	}
 }

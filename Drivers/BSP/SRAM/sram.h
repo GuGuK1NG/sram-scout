@@ -24,13 +24,13 @@ typedef enum {
     GATE_ERR_ROUND1  = -1,   
     GATE_ERR_ROUND2  = -2,  
     GATE_ERR_ROUND3  = -3,   
-} Gate_Status;
+} Gate_Status;					//门限返回值
 
 typedef enum {
     ALIAS_YES   = 0,   
     ALIAS_NO    = 1,   
     ALIAS_GHOST = 2,   
-} Alias_Result;
+} Alias_Result;	
 
 typedef struct {
       uint32_t alias_cnt;
@@ -41,14 +41,14 @@ typedef struct {
       uint32_t base;
       uint32_t step;
       uint32_t k_max;
-  } ScanStats;
+} ScanStats;
 
 typedef enum{
 	BIT_OK     = 0,
     BIT_STUCK0 = 1,   /* 该位恒 0 */
     BIT_STUCK1 = 2,   /* 该位恒 1 */
     BIT_BRIDGE = 3,   /* 疑似与其它位短路 */
-}BitStatus;
+}__attribute__((mode(QI))) BitStatus;
 
 typedef enum {
     SCAN_OK        = 0,
@@ -63,8 +63,8 @@ typedef struct {
 }BusAddrResult;
 
 typedef struct{
-	BusAddrResult a[BUS_ADDR_CNT];
-	uint32_t cnt;
+	BusAddrResult a[BUS_ADDR_CNT];		//A0-A5
+	uint32_t cnt;						//计数器，实际测量的个数
 }BusReport;
 
 
@@ -85,7 +85,7 @@ Scan_Status  SRAM_AliasScan_Param(uint32_t base, uint32_t step,
 
 
 //**阶段2测试代码**//
-uint32_t sram_walk1(uint32_t addr, BitStatus *out, uint16_t *raw);
+uint32_t sram_walk(uint32_t addr, BitStatus *out, uint16_t *raw,uint8_t mode);
 Scan_Status sram_run_bus_matrix(void);   /* 阶段2.2: 六地址矩阵扫描 */
-
+void sram_run_bus_matrix_print(const BusReport *rep, uint8_t mode); //结果打印
 #endif
